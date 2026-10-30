@@ -1,35 +1,39 @@
 # Harborly Email Worker
 
-这是按产品部署的 Cloudflare Email Routing Worker。它把收到的邮件转发到该产品已经验证过的个人邮箱，再把信封、纯文本和附件元数据上报给 Harborly。
+这是 Cloudflare Email Routing Worker。每个 Cloudflare 账号部署一份，对应 Harborly 里的一个用户级邮件连接，该账号下所有产品共用。它把收到的邮件转发到你已验证的个人邮箱，再把信封、纯文本和附件元数据上报给 Harborly。
 
-Harborly 主服务是闭源的。本目录是独立的 MIT 开源适配器，同一个模板为每个产品部署一份。Worker 不做垃圾邮件过滤，也不做 AI 分类；所有通过本产品地址校验的来信都会转发并上报。
+Harborly 主服务是闭源的。本目录是独立的 MIT 开源适配器。Worker 不做垃圾邮件过滤，也不做 AI 分类，也不持有地址名单；所有送到它的来信都会转发并上报。
 
 Worker 只导出 `email` 处理函数，没有公网 `fetch` 调试入口。
 
 ## 处理顺序
 
-1. 用 `ALLOWED_RECIPIENTS` 核对信封收件人。精确地址优先，其次才是可选的 `*@apex`。不在名单里的地址会直接 `setReject`，不转发，也不上报，避免进到错误产品。
-2. 转发到 `FORWARD_TO`。这个地址必须是 Cloudflare 里已经验证的 destination。转发失败会记 `forwardStatus: "failed"`，然后继续上报。
-3. `ctx.waitUntil` 异步上报。转发抛错时仍然上报。
-4. 上报最终失败后，如果配置了飞书兜底，再发一条只含产品名、接收时间和失败码的告警。
+1. 转发到 `FORWARD_TO`。这个地址必须是 Cloudflare 里已经验证的 destination。转发失败会记 `forwardStatus: "failed"`，然后继续上报。
+2. `ctx.waitUntil` 异步上报。转发抛错时仍然上报。
+3. 产品归属由 Harborly 按信封收件地址决定。未在任何产品登记的地址，Harborly 返回 4xx 拒收，Worker 不重试，原因显示在 Harborly 的连接页。
+4. 上报最终失败后，如果配置了飞书兜底，再发一条只含连接标签、接收时间和失败码的告警。
 
 网络目标只来自 Worker 配置。邮件正文、主题和头里的链接不会成为请求地址。
 
-## 每个产品一份
+## 在 Harborly 建连接
 
-复制本模板后，至少改这些配置：
+1. 在 Harborly「账户 → 邮件连接」新建一个连接，取得 connectionId、连接密钥和 Ingest URL。密钥只显示一次，直接放进部署环境变量，不要贴到别处。
+2. 在每个产品的邮件设置里登记该产品使用的收件地址。地址只在 Harborly 登记，不写进 Worker。
 
-| 名称 | 来源 | 作用 |
-| --- | --- | --- |
-| `name` | `wrangler.jsonc` | 该产品专用的 Worker 名称。同名部署会覆盖另一个产品。 |
-| `INGEST_URL` | 明文变量 | Harborly `POST /api/workspace/mail-ingest`，只允许 HTTPS。 |
-| `INTEGRATION_ID` | 明文变量 | 集成 GUID。 |
-| `INTEGRATION_SECRET` | secret | HMAC 密钥，原始 UTF-8，不做 base64 解码。 |
-| `FORWARD_TO` | 明文变量 | 已验证的个人邮箱。 |
-| `ALLOWED_RECIPIENTS` | 明文变量 | 逗号分隔。精确地址，或可选的 `*@apex`。 |
-| `PRODUCT_NAME` | 明文变量 | 飞书兜底里显示的产品名，最长 80 字符。 |
-| `FALLBACK_WEBHOOK` | 可选 secret | 只允许 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`。 |
-| `FALLBACK_SIGN_SECRET` | 可选 secret | 飞书机器人签名密钥。 |
+一个 Cloudflare 账号对应一个连接、一份部署。同一账号下新增产品时，只需在 Harborly 登记地址，不用重新部署 Worker。
+
+## 配置
+
+| 名称                   | 来源             | 作用                                                           |
+| ---------------------- | ---------------- | -------------------------------------------------------------- |
+| `name`                 | `wrangler.jsonc` | Worker 名称。同一账号内唯一即可。                              |
+| `INGEST_URL`           | 明文变量         | 连接页给出的 Ingest URL，只允许 HTTPS。                        |
+| `CONNECTION_ID`        | 明文变量         | 连接 GUID。                                                    |
+| `CONNECTION_SECRET`    | secret           | HMAC 密钥，原始 UTF-8，不做 base64 解码。                      |
+| `FORWARD_TO`           | 明文变量         | 已验证的个人邮箱，所有产品共用。                               |
+| `CONNECTION_LABEL`     | 可选明文变量     | 飞书兜底里显示的连接标签，最长 80 字符。                       |
+| `FALLBACK_WEBHOOK`     | 可选 secret      | 只允许 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`。 |
+| `FALLBACK_SIGN_SECRET` | 可选 secret      | 飞书机器人签名密钥。                                           |
 
 默认 `wrangler.jsonc` 不写真实域名、真实收件地址，也不声明入站路由。明文变量由部署脚本在运行时传入。
 
@@ -40,19 +44,18 @@ Worker 只导出 `email` 处理函数，没有公网 `fetch` 调试入口。
 1. 打开 Dashboard 的 **Compute > Email Service > Email Routing > Destination addresses**。
 2. 添加个人邮箱。Cloudflare 会发送验证信。
 3. 打开验证信并确认 **Verify email address**。在此之前不要把路由指到这个地址。
-4. Destination 属于账号，同一个账号下的域名可以复用。
+4. Destination 属于账号，同一个账号下的所有域名和产品共用这一个转发邮箱。
 
-## 路由：精确地址优先，catch-all 可选
+## 路由：每个域名一条 catch-all
 
-推荐先在 Dashboard 手工切换，再考虑用配置声明路由。
+推荐在 Dashboard 手工配置。
 
-1. 进入对应域名的 **Routing rules**。
-2. 为这个产品的每一个公开地址建立规则，Action 选 **Send to a Worker**，Worker 选该产品这份部署。
-3. 精确地址规则优先于 catch-all。`support@example.com` 已有规则时，不会掉进 `*@example.com`。
-4. catch-all 只支持域名 apex，例如 `*@example.com`。它会接住该主机上没有精确规则的本地部分。子域不会被父域 catch-all 匹配；`support@mail.example.com` 需要单独写精确地址。
-5. 同一个 apex 上有多个产品时，不要给其中某一个产品打开 catch-all，否则其余地址会进入那个产品。Wrangler 4.156 的配置说明里，apex catch-all 还会收到该 zone 中没有精确规则的子域来信。本 Worker 的 `*@apex` 只匹配那个主机本身，不匹配子域；子域地址要逐个写入名单，否则会拒绝。
-6. `ALLOWED_RECIPIENTS` 是产品边界。即使 Email Routing 把信送到了这个 Worker，名单之外的收件人仍然不会转发到本产品的 `FORWARD_TO`。
-7. 比较按整个收件地址进行。`support+tag@example.com` 不等于 `support@example.com`。需要加号地址时，把完整地址写进名单，或只在该 apex 确实属于这个产品时使用 catch-all。
+1. 进入每个域名的 **Routing rules**。
+2. 把 catch-all（`*@example.com`）的 Action 设为 **Send to a Worker**，Worker 选这份部署。之后同一域名下的新产品地址无需再改 Cloudflare，只在 Harborly 登记即可。
+3. 不想用 catch-all 时，也可以只为个别地址建立精确规则指向这份 Worker。精确地址规则优先于 catch-all。
+4. catch-all 会把该域名任意地址的来信都送到 Worker，因此也都会转发到 `FORWARD_TO`。其中未在 Harborly 登记的地址会被 Harborly 拒收，原因显示在连接页；转发不受影响。
+5. catch-all 只覆盖域名 apex。子域地址（如 `support@mail.example.com`）需要该子域自己的规则。
+6. 比较按整个收件地址进行。`support+tag@example.com` 不等于 `support@example.com`，需要时在 Harborly 登记完整地址。
 
 ### `addresses` 与环境
 
@@ -71,12 +74,11 @@ Wrangler 4.113.0 起可以用顶层 `addresses` 把入站地址交给当前 Work
 ```bash
 pnpm install
 export INGEST_URL="https://example.invalid/api/workspace/mail-ingest"
-export INTEGRATION_ID="00000000-0000-0000-0000-000000000000"
+export CONNECTION_ID="00000000-0000-0000-0000-000000000000"
+export CONNECTION_SECRET="replace-me"
 export FORWARD_TO="verified-destination@example.invalid"
-export ALLOWED_RECIPIENTS="support@example.invalid,*@example.invalid"
-export PRODUCT_NAME="example-product"
-export INTEGRATION_SECRET="replace-me"
 # 可选
+# export CONNECTION_LABEL="example-connection"
 # export FALLBACK_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/00000000-0000-0000-0000-000000000000"
 # export FALLBACK_SIGN_SECRET="replace-me"
 bash scripts/deploy.sh
@@ -92,12 +94,12 @@ bash scripts/deploy.sh
 
 请求头：
 
-- `X-Harborly-Integration`
+- `X-Harborly-Connection`：connectionId
 - `X-Harborly-Timestamp`：Unix 秒
 - `X-Harborly-Nonce`：UUID
 - `X-Harborly-Signature`：小写 hex HMAC-SHA256
 
-签名输入是 `integrationId\n秒\nnonce\nsha256hex(body原始UTF8)`。
+签名输入是 `connectionId + "\n" + Unix秒 + "\n" + nonce + "\n" + sha256hex(body原始字节)`，密钥按原始 UTF-8 使用。这是协议 v2。
 
 `fetch` 设置 `redirect: "manual"`，遇到重定向就失败，避免密钥被带到另一个地址。`INGEST_URL` 只接受 HTTPS，且不能带账号信息。
 
@@ -115,7 +117,7 @@ JSON 字段：`envelopeFrom`、`envelopeTo`、`messageId`、`subject`、`textBod
 
 ## 飞书兜底
 
-只在 Harborly 上报最终失败时发送。消息只有产品名、接收时间和失败码，没有发件人、主题或正文。
+只在 Harborly 上报最终失败时发送。消息只有连接标签、接收时间和失败码，没有发件人、收件地址、主题或正文。
 
 Webhook 必须是 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`，不能带端口、查询串或其他路径。请求同样禁止跟随重定向。配置了签名密钥时，按飞书自定义机器人的算法签名：密钥材料是 `timestamp\nsecret`，对空字节做 HMAC-SHA256，再做 Base64，放进 JSON 的 `timestamp` 和 `sign`。HTTP 状态和飞书返回的 `code` / `StatusCode` 都必须表示成功。
 
@@ -129,7 +131,11 @@ Webhook 必须是 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`，不能
 
 ```bash
 pnpm install
+pnpm lint
+pnpm format:check
 pnpm exec tsc --noEmit
 ```
 
-不要从这个包启动 Worker、执行 `wrangler deploy`，或向真实的 Harborly / 飞书地址发请求，除非你正在按上面的步骤部署自己的产品。
+提交前对改动过的文件跑 `pnpm exec prettier --write <文件>`（或全仓 `pnpm format`），保持格式一致。`pnpm install` 后会自动启用 pre-commit hook，commit 时对暂存文件做同样的事。
+
+不要从这个包启动 Worker、执行 `wrangler deploy`，或向真实的 Harborly / 飞书地址发请求，除非你正在按上面的步骤部署自己的连接。

@@ -2,10 +2,9 @@
 # 生产密钥用 `pnpm exec wrangler secret put`，不要写进 wrangler.jsonc。
 
 INGEST_URL=https://example.invalid/api/workspace/mail-ingest
-INTEGRATION_ID=00000000-0000-0000-0000-000000000000
-INTEGRATION_SECRET=replace-me
+CONNECTION_ID=00000000-0000-0000-0000-000000000000
+CONNECTION_SECRET=replace-me
 FORWARD_TO=verified-destination@example.invalid
-ALLOWED_RECIPIENTS=support@example.invalid
-PRODUCT_NAME=example-product
+CONNECTION_LABEL=example-connection
 FALLBACK_WEBHOOK=
 FALLBACK_SIGN_SECRET=

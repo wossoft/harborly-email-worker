@@ -36,13 +36,13 @@ export interface MailIngestPayload {
   forwardStatus: ForwardStatus;
 }
 
+/** 每个 Cloudflare 账号一份部署，对应 Harborly 的一个用户级邮件连接。 */
 export interface Env {
   INGEST_URL: string;
-  INTEGRATION_ID: string;
+  CONNECTION_ID: string;
+  CONNECTION_SECRET: string;
   FORWARD_TO: string;
-  ALLOWED_RECIPIENTS: string;
-  PRODUCT_NAME: string;
-  INTEGRATION_SECRET: string;
+  CONNECTION_LABEL?: string;
   FALLBACK_WEBHOOK?: string;
   FALLBACK_SIGN_SECRET?: string;
 }
@@ -54,7 +54,6 @@ export interface InboundEmail {
   readonly headers: Headers;
   readonly raw: ReadableStream<Uint8Array>;
   readonly rawSize: number;
-  setReject(reason: string): void;
   forward(rcptTo: string, headers?: Headers): Promise<unknown>;
 }
 

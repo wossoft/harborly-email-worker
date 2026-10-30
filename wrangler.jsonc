@@ -8,15 +8,15 @@
   "observability": {
     "enabled": true,
     "logs": {
-      "invocation_logs": false
-    }
+      "invocation_logs": false,
+    },
   },
-  // 每个产品复制本模板后单独部署，并把 name 改成该产品专用的 Worker 名称。
+  // 每个 Cloudflare 账号部署一份，对应 Harborly 的一个用户级邮件连接；该账号下所有产品共用。
   // 明文变量由 scripts/deploy.sh 在部署时传入。这里不写真实域名、收件地址或密钥。
   // 故意不声明入站路由字段：省略表示部署时不改 Email Routing。
   // 不要把该字段设为空数组，否则会删除本 Worker 已管理的路由。
   // 该字段是顶层配置，所有 environment 共享；写在 env 下会被 Wrangler 忽略。
   "secrets": {
-    "required": ["INTEGRATION_SECRET"]
-  }
+    "required": ["CONNECTION_SECRET"],
+  },
 }

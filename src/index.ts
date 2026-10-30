@@ -1,5 +1,5 @@
 import { postFallback, postIngest, serializeIngest } from "./client.ts";
-import { isExactAddress, isRecipientAllowed, parseInbound } from "./parser.ts";
+import { isExactAddress, parseInbound } from "./parser.ts";
 import type { Env, ForwardStatus, InboundEmail } from "./types.ts";
 
 const SAFE_TOKEN = /^[a-z0-9_]{1,40}$/;
@@ -24,14 +24,16 @@ function safeLog(entry: {
   const record: Record<string, string | number> = {
     event: SAFE_TOKEN.test(entry.event) ? entry.event : "unclassified",
   };
-  if (entry.code !== undefined) record.code = SAFE_TOKEN.test(entry.code) ? entry.code : "unclassified";
+  if (entry.code !== undefined)
+    record.code = SAFE_TOKEN.test(entry.code) ? entry.code : "unclassified";
   if (entry.forwardStatus === "succeeded" || entry.forwardStatus === "failed") {
     record.forwardStatus = entry.forwardStatus;
   }
   const numeric: Array<"rawSize" | "bytes" | "durationMs"> = ["rawSize", "bytes", "durationMs"];
   for (const key of numeric) {
     const value = entry[key];
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) record[key] = Math.floor(value);
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+      record[key] = Math.floor(value);
   }
   console.log(JSON.stringify(record));
 }
@@ -100,26 +102,10 @@ async function handleEmail(message: InboundEmail, env: Env, ctx: ExecutionContex
   const rawSize = safeRawSize(message.rawSize);
   const started = Date.now();
   let forwardStatus: ForwardStatus = "failed";
-  let shouldReport = false;
 
+  // 不在 Worker 里判断产品归属：每封来信都先转发，再独立上报。
+  // 收件地址属于哪个产品由 Harborly 按登记地址决定，未登记地址由服务端拒收。
   try {
-    let recipient = "";
-    try {
-      recipient = binding(message.to);
-    } catch {
-      recipient = "";
-    }
-    if (!isRecipientAllowed(recipient, binding(env.ALLOWED_RECIPIENTS))) {
-      safeLog({ event: "recipient_unmapped", rawSize, durationMs: Date.now() - started });
-      try {
-        message.setReject("recipient not accepted");
-      } catch {
-        safeLog({ event: "recipient_unmapped", code: "reject_failed", rawSize });
-      }
-      return;
-    }
-
-    shouldReport = true;
     const forwardTo = binding(env.FORWARD_TO).trim();
     if (!isExactAddress(forwardTo.toLowerCase())) {
       safeLog({
@@ -151,7 +137,6 @@ async function handleEmail(message: InboundEmail, env: Env, ctx: ExecutionContex
       }
     }
   } finally {
-    if (!shouldReport) return;
     const report = deliverReport(message, env, receivedAt, rawSize, forwardStatus);
     try {
       ctx.waitUntil(report);
@@ -167,12 +152,12 @@ export default {
       await handleEmail(message, env, ctx);
     } catch {
       let rawSize = 0;
-    try {
-      rawSize = safeRawSize(message.rawSize);
-    } catch {
-      rawSize = 0;
-    }
-    safeLog({ event: "handler_failed", code: "internal", rawSize });
+      try {
+        rawSize = safeRawSize(message.rawSize);
+      } catch {
+        rawSize = 0;
+      }
+      safeLog({ event: "handler_failed", code: "internal", rawSize });
     }
   },
 };

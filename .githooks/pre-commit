@@ -1,0 +1,17 @@
+#!/bin/sh
+# commit 前自动格式化暂存文件并复查 lint；prettier/eslint 失败则中止提交
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+pretty=$(echo "$staged" | grep -E '\.(ts|mjs|js|json|jsonc|md)$' || true)
+lint=$(echo "$staged" | grep -E '\.(ts|mjs|js)$' || true)
+
+[ -z "$pretty" ] && exit 0
+
+pnpm exec prettier --write $pretty
+git add $pretty
+
+if [ -n "$lint" ]; then
+  pnpm exec eslint --fix $lint
+  git add $lint
+fi

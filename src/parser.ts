@@ -1,9 +1,5 @@
 import PostalMime, { decodeWords } from "postal-mime";
-import type {
-  AttachmentMeta,
-  InboundEmail,
-  ParsedMail,
-} from "./types.ts";
+import type { AttachmentMeta, InboundEmail, ParsedMail } from "./types.ts";
 import {
   MAX_ADDRESS_CHARS,
   MAX_ATTACHMENTS,
@@ -17,17 +13,9 @@ import {
 
 const EXACT_ADDRESS =
   /^[a-z0-9._%+\-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const CATCH_ALL =
-  /^\*@([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/;
 const CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
 const MULTILINE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 const SINGLE_LINE_CONTROL = /[\u0000-\u001F\u007F-\u009F]+/g;
-
-interface AllowRule {
-  kind: "exact" | "catchall";
-  address?: string;
-  domain?: string;
-}
 
 interface MimeAttachment {
   filename?: string | null;
@@ -67,7 +55,10 @@ function normalizeUnicode(input: string): string {
 }
 
 /** 按 UTF-16 单元截断，与后端 string.Length 校验一致；不在代理对中间切断。 */
-export function truncateUnits(input: string, maxChars: number): { text: string; truncated: boolean } {
+export function truncateUnits(
+  input: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   if (input.length <= maxChars) return { text: input, truncated: false };
   let end = maxChars;
   const code = input.charCodeAt(end - 1);
@@ -76,7 +67,10 @@ export function truncateUnits(input: string, maxChars: number): { text: string; 
 }
 
 /** 去掉控制字符和孤立代理项，再按 UTF-16 单元截断，保证后续 JSON.stringify 得到合法 UTF-8。 */
-export function sanitizeLine(value: string, maxChars: number): { text: string; truncated: boolean } {
+export function sanitizeLine(
+  value: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   const cleaned = normalizeUnicode(stripUnpairedSurrogates(value))
     .replace(SINGLE_LINE_CONTROL, " ")
     .replace(/[ \t\u00a0]+/g, " ")
@@ -106,24 +100,6 @@ export function isExactAddress(value: string): boolean {
   return EXACT_ADDRESS.test(value);
 }
 
-function parseAllowList(allowList: string): AllowRule[] {
-  const rules: AllowRule[] = [];
-  for (const part of allowList.split(",")) {
-    const entry = part.trim().toLowerCase();
-    if (!entry || hasControl(entry)) continue;
-    if (entry.startsWith("*@")) {
-      const match = CATCH_ALL.exec(entry);
-      const domain = match?.[1];
-      if (!domain || domain.length > 253 || isIpv4(domain)) continue;
-      rules.push({ kind: "catchall", domain });
-      continue;
-    }
-    if (!isExactAddress(entry)) continue;
-    rules.push({ kind: "exact", address: entry });
-  }
-  return rules;
-}
-
 function normalizeAddress(value: string): string | null {
   if (hasControl(value)) return null;
   const cleaned = value.trim().toLowerCase();
@@ -133,24 +109,6 @@ function normalizeAddress(value: string): string | null {
   candidate = candidate.trim();
   if (!isExactAddress(candidate)) return null;
   return candidate;
-}
-
-/**
- * 精确地址优先，其次才是同一主机名的 apex catch-all。
- * *@example.com 不匹配子域，也不把未列入名单的地址当成这个产品的邮件。
- */
-export function isRecipientAllowed(envelopeTo: string, allowList: string): boolean {
-  const recipient = normalizeAddress(envelopeTo);
-  if (!recipient) return false;
-  const rules = parseAllowList(allowList);
-  for (const rule of rules) {
-    if (rule.kind === "exact" && rule.address === recipient) return true;
-  }
-  const domain = recipient.slice(recipient.lastIndexOf("@") + 1);
-  for (const rule of rules) {
-    if (rule.kind === "catchall" && rule.domain === domain) return true;
-  }
-  return false;
 }
 
 function readHeader(headers: Headers, name: string): string {
@@ -193,7 +151,9 @@ function backendAcceptsAddress(value: string): boolean {
   if (value.length > MAX_ADDRESS_CHARS || /\s/.test(value) || hasControl(value)) return false;
   const parts = value.split("@");
   if (parts.length !== 2 || parts[0].length === 0 || parts[0].includes("*")) return false;
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(parts[1]);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+    parts[1],
+  );
 }
 
 function safeRawSize(value: number): number | null {
@@ -201,7 +161,10 @@ function safeRawSize(value: number): number | null {
   return Math.min(Math.floor(value), Number.MAX_SAFE_INTEGER);
 }
 
-function contentByteSize(content: MimeAttachment["content"], encoding: MimeAttachment["encoding"]): number {
+function contentByteSize(
+  content: MimeAttachment["content"],
+  encoding: MimeAttachment["encoding"],
+): number {
   if (content == null) return 0;
   if (typeof content === "string") {
     if (encoding === "base64") {
@@ -217,17 +180,22 @@ function contentByteSize(content: MimeAttachment["content"], encoding: MimeAttac
 
 function attachmentMeta(item: MimeAttachment): AttachmentMeta {
   const fileName = sanitizeLine(item.filename ?? "", MAX_FILENAME_CHARS).text;
-  const contentType = sanitizeLine(item.mimeType ?? "", MAX_CONTENT_TYPE_CHARS).text || "application/octet-stream";
+  const contentType =
+    sanitizeLine(item.mimeType ?? "", MAX_CONTENT_TYPE_CHARS).text || "application/octet-stream";
   const size = contentByteSize(item.content, item.encoding);
   return {
     fileName,
     contentType,
-    size: Number.isFinite(size) && size > 0 ? Math.min(Math.floor(size), Number.MAX_SAFE_INTEGER) : 0,
+    size:
+      Number.isFinite(size) && size > 0 ? Math.min(Math.floor(size), Number.MAX_SAFE_INTEGER) : 0,
   };
 }
 
 function headerOnly(message: InboundEmail): ParsedMail {
-  const subject = sanitizeLine(decodeHeader(readHeader(message.headers, "subject")), MAX_SUBJECT_CHARS).text;
+  const subject = sanitizeLine(
+    decodeHeader(readHeader(message.headers, "subject")),
+    MAX_SUBJECT_CHARS,
+  ).text;
   return {
     envelopeFrom: envelopeAddress(message.from),
     envelopeTo: envelopeAddress(message.to),
@@ -241,7 +209,10 @@ function headerOnly(message: InboundEmail): ParsedMail {
 }
 
 function failedParse(message: InboundEmail): ParsedMail {
-  const subject = sanitizeLine(decodeHeader(readHeader(message.headers, "subject")), MAX_SUBJECT_CHARS).text;
+  const subject = sanitizeLine(
+    decodeHeader(readHeader(message.headers, "subject")),
+    MAX_SUBJECT_CHARS,
+  ).text;
   return {
     envelopeFrom: envelopeAddress(message.from),
     envelopeTo: envelopeAddress(message.to),
@@ -255,7 +226,10 @@ function failedParse(message: InboundEmail): ParsedMail {
 }
 
 /** 读取超过上限就中断，避免 rawSize 不真实时把更大的 MIME 读进内存。 */
-function limitStream(stream: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> {
+function limitStream(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): ReadableStream<Uint8Array> {
   const reader = stream.getReader();
   let seen = 0;
   return new ReadableStream<Uint8Array>({
@@ -274,7 +248,9 @@ function limitStream(stream: ReadableStream<Uint8Array>, maxBytes: number): Read
         }
         controller.enqueue(value);
       } catch (cause) {
-        controller.error(cause instanceof Error ? new Error("parse_limit") : new Error("parse_limit"));
+        controller.error(
+          cause instanceof Error ? new Error("parse_limit") : new Error("parse_limit"),
+        );
       }
     },
     cancel() {
@@ -299,7 +275,10 @@ export async function parseInbound(message: InboundEmail): Promise<ParsedMail> {
       limitStream(message.raw, MAX_RAW_PARSE_BYTES),
     );
     const text = sanitizeMultiline(email.text ?? "", MAX_TEXT_CHARS);
-    const subject = sanitizeLine(email.subject ?? decodeHeader(readHeader(message.headers, "subject")), MAX_SUBJECT_CHARS);
+    const subject = sanitizeLine(
+      email.subject ?? decodeHeader(readHeader(message.headers, "subject")),
+      MAX_SUBJECT_CHARS,
+    );
     const attachments = Array.isArray(email.attachments) ? email.attachments : [];
     const metas: AttachmentMeta[] = [];
     const count = Math.min(attachments.length, MAX_ATTACHMENTS);

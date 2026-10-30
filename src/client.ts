@@ -7,8 +7,7 @@ const ATTEMPT_TIMEOUT_MS = 4_000;
 const FALLBACK_ATTEMPTS = 2;
 const FALLBACK_BUDGET_MS = 5_000;
 const FALLBACK_TIMEOUT_MS = 3_000;
-const UUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const SAFE_CODE = /^[a-z0-9_]{1,40}$/;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -80,14 +79,16 @@ async function discard(response: Response): Promise<void> {
 
 function ingestUrlError(raw: string): string | null {
   const value = raw.trim();
-  if (value.length === 0 || value.length > 2048 || /[\u0000-\u001F\u007F]/.test(value)) return "invalid_ingest_url";
+  if (value.length === 0 || value.length > 2048 || /[\u0000-\u001F\u007F]/.test(value))
+    return "invalid_ingest_url";
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     return "invalid_ingest_url";
   }
-  if (url.protocol !== "https:" || url.username || url.password || url.hostname.length === 0) return "invalid_ingest_url";
+  if (url.protocol !== "https:" || url.username || url.password || url.hostname.length === 0)
+    return "invalid_ingest_url";
   return null;
 }
 
@@ -101,7 +102,8 @@ export function canonicalFeishuWebhook(raw: string): string | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || url.hostname !== "open.feishu.cn" || url.port !== "") return null;
+  if (url.protocol !== "https:" || url.hostname !== "open.feishu.cn" || url.port !== "")
+    return null;
   if (url.username || url.password || url.search !== "" || url.hash !== "") return null;
   const match = url.pathname.match(/^\/open-apis\/bot\/v2\/hook\/([0-9a-fA-F-]{36})$/);
   const id = match?.[1];
@@ -116,10 +118,12 @@ function encodedSize(payload: MailIngestPayload): number {
 }
 
 function reducedStatus(source: MailIngestPayload): ParseStatus {
-  return source.parseStatus === "failed" && source.rawSize <= MAX_RAW_PARSE_BYTES ? "failed" : "headers_only";
+  return source.parseStatus === "failed" && source.rawSize <= MAX_RAW_PARSE_BYTES
+    ? "failed"
+    : "headers_only";
 }
 
-// 地址字段最多 320 字符，始终放得下；保留它们，否则后端无法归属而拒收。
+// 地址字段最多 320 字符，始终放得下；保留它们，否则后端无法按收件地址归属产品而拒收。
 function minimalPayload(source: MailIngestPayload): MailIngestPayload {
   return {
     envelopeFrom: source.envelopeFrom,
@@ -141,7 +145,11 @@ function shrinkPayload(payload: MailIngestPayload): MailIngestPayload {
   if (encodedSize(current) <= MAX_API_BYTES) return current;
 
   let text = current.textBody;
-  for (let guard = 0; guard < 20 && encodedSize(current) > MAX_API_BYTES && text.length > 0; guard++) {
+  for (
+    let guard = 0;
+    guard < 20 && encodedSize(current) > MAX_API_BYTES && text.length > 0;
+    guard++
+  ) {
     const chars = Array.from(text);
     text = chars.slice(0, Math.floor(chars.length / 2)).join("");
     current = { ...current, textBody: text, bodyTruncated: true };
@@ -157,7 +165,8 @@ function shrinkPayload(payload: MailIngestPayload): MailIngestPayload {
   const parseStatus = reducedStatus(current);
   current = {
     ...current,
-    messageId: current.messageId === null ? null : Array.from(current.messageId).slice(0, 80).join(""),
+    messageId:
+      current.messageId === null ? null : Array.from(current.messageId).slice(0, 80).join(""),
     subject: Array.from(current.subject).slice(0, 80).join(""),
     textBody: "",
     attachmentsMeta: [],
@@ -193,13 +202,17 @@ function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-async function signedHeaders(integrationId: string, key: CryptoKey, bodyHash: string): Promise<Headers> {
+async function signedHeaders(
+  connectionId: string,
+  key: CryptoKey,
+  bodyHash: string,
+): Promise<Headers> {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = crypto.randomUUID();
-  const signature = await hmacHex(key, `${integrationId}\n${timestamp}\n${nonce}\n${bodyHash}`);
+  const signature = await hmacHex(key, `${connectionId}\n${timestamp}\n${nonce}\n${bodyHash}`);
   const headers = new Headers();
   headers.set("content-type", "application/json; charset=utf-8");
-  headers.set("X-Harborly-Integration", integrationId);
+  headers.set("X-Harborly-Connection", connectionId);
   headers.set("X-Harborly-Timestamp", timestamp);
   headers.set("X-Harborly-Nonce", nonce);
   headers.set("X-Harborly-Signature", signature);
@@ -208,11 +221,11 @@ async function signedHeaders(integrationId: string, key: CryptoKey, bodyHash: st
 
 export async function postIngest(env: Env, body: Uint8Array): Promise<AttemptResult> {
   const ingestUrl = binding(env.INGEST_URL).trim();
-  const integrationId = binding(env.INTEGRATION_ID).trim();
-  const secret = binding(env.INTEGRATION_SECRET);
+  const connectionId = binding(env.CONNECTION_ID).trim();
+  const secret = binding(env.CONNECTION_SECRET);
   const urlError = ingestUrlError(ingestUrl);
   if (urlError) return { ok: false, code: urlError };
-  if (!UUID_RE.test(integrationId)) return { ok: false, code: "invalid_integration_id" };
+  if (!UUID_RE.test(connectionId)) return { ok: false, code: "invalid_connection_id" };
   if (secret.length === 0 || secret.length > 4096) return { ok: false, code: "missing_secret" };
 
   let key: CryptoKey;
@@ -228,19 +241,24 @@ export async function postIngest(env: Env, body: Uint8Array): Promise<AttemptRes
   let lastCode = "ingest_failed";
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining < 250) return { ok: false, code: lastCode === "ingest_failed" ? "budget_exceeded" : lastCode };
+    if (remaining < 250)
+      return {
+        ok: false,
+        code: lastCode === "ingest_failed" ? "budget_exceeded" : lastCode,
+      };
     const timeout = Math.min(ATTEMPT_TIMEOUT_MS, remaining);
     try {
       const response = await fetch(ingestUrl, {
         method: "POST",
         redirect: "manual",
         cache: "no-store",
-        headers: await signedHeaders(integrationId, key, bodyHash),
+        headers: await signedHeaders(connectionId, key, bodyHash),
         body,
         signal: AbortSignal.timeout(timeout),
       });
       const status = response.status;
-      const redirected = (response.type as string) === "opaqueredirect" || (status >= 300 && status < 400);
+      const redirected =
+        (response.type as string) === "opaqueredirect" || (status >= 300 && status < 400);
       await discard(response);
       if (redirected) return { ok: false, code: "redirect_rejected" };
       if (status >= 200 && status < 300) return { ok: true, code: "accepted" };
@@ -265,10 +283,12 @@ async function feishuSign(secret: string, timestamp: string): Promise<string> {
   return bytesToBase64(new Uint8Array(signature));
 }
 
-function fallbackText(productName: string, receivedAt: string, code: string): string {
-  const name = productName.trim().length > 0 ? productName.trim().slice(0, 80) : "未命名产品";
+/** 只含连接标签、接收时间和失败码；不含主题、正文、发件人或收件地址。 */
+function fallbackText(connectionLabel: string, receivedAt: string, code: string): string {
+  const label =
+    connectionLabel.trim().length > 0 ? connectionLabel.trim().slice(0, 80) : "未命名连接";
   const when = ISO_TIME.test(receivedAt) ? receivedAt : new Date().toISOString();
-  return `Harborly 邮件上报失败\n产品: ${name}\n接收时间: ${when}\n失败码: ${safeCode(code)}`;
+  return `Harborly 邮件上报失败\n连接: ${label}\n接收时间: ${when}\n失败码: ${safeCode(code)}`;
 }
 
 async function readLimited(response: Response, maxBytes: number): Promise<string | null> {
@@ -310,32 +330,55 @@ function feishuAccepted(body: string): { ok: boolean; code: string } {
   if (typeof parsed !== "object" || parsed === null) return { ok: false, code: "feishu_rejected" };
   const record = parsed as Record<string, unknown>;
   const hasCode = "code" in record;
-  const statusValue = "StatusCode" in record ? record.StatusCode : "status_code" in record ? record.status_code : undefined;
+  const statusValue =
+    "StatusCode" in record
+      ? record.StatusCode
+      : "status_code" in record
+        ? record.status_code
+        : undefined;
   const hasStatus = statusValue !== undefined;
   if (!hasCode && !hasStatus) return { ok: false, code: "feishu_rejected" };
   if (hasCode && record.code !== 0) {
-    const numeric = typeof record.code === "number" && Number.isSafeInteger(record.code) ? record.code : null;
-    return { ok: false, code: numeric !== null && numeric >= 0 && numeric <= 999999 ? `feishu_${numeric}` : "feishu_rejected" };
+    const numeric =
+      typeof record.code === "number" && Number.isSafeInteger(record.code) ? record.code : null;
+    return {
+      ok: false,
+      code:
+        numeric !== null && numeric >= 0 && numeric <= 999999
+          ? `feishu_${numeric}`
+          : "feishu_rejected",
+    };
   }
   if (hasStatus && statusValue !== 0) return { ok: false, code: "feishu_rejected" };
   return { ok: true, code: "accepted" };
 }
 
-export async function postFallback(env: Env, receivedAt: string, failureCode: string): Promise<AttemptResult> {
+export async function postFallback(
+  env: Env,
+  receivedAt: string,
+  failureCode: string,
+): Promise<AttemptResult> {
   const rawWebhook = binding(env.FALLBACK_WEBHOOK).trim();
   if (rawWebhook.length === 0) return { ok: true, code: "not_configured" };
   const webhook = canonicalFeishuWebhook(rawWebhook);
   if (!webhook) return { ok: false, code: "invalid_webhook" };
 
   const secret = binding(env.FALLBACK_SIGN_SECRET);
-  const productName = binding(env.PRODUCT_NAME).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ").trim().slice(0, 80);
-  const text = fallbackText(productName, receivedAt, failureCode);
+  const connectionLabel = binding(env.CONNECTION_LABEL)
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .trim()
+    .slice(0, 80);
+  const text = fallbackText(connectionLabel, receivedAt, failureCode);
   const deadline = Date.now() + FALLBACK_BUDGET_MS;
   let lastCode = "fallback_failed";
 
   for (let attempt = 0; attempt < FALLBACK_ATTEMPTS; attempt++) {
     const remaining = deadline - Date.now();
-    if (remaining < 250) return { ok: false, code: lastCode === "fallback_failed" ? "budget_exceeded" : lastCode };
+    if (remaining < 250)
+      return {
+        ok: false,
+        code: lastCode === "fallback_failed" ? "budget_exceeded" : lastCode,
+      };
     const payload: Record<string, unknown> = {
       msg_type: "text",
       content: { text },
@@ -360,7 +403,8 @@ export async function postFallback(env: Env, receivedAt: string, failureCode: st
         signal: AbortSignal.timeout(Math.min(FALLBACK_TIMEOUT_MS, remaining)),
       });
       const status = response.status;
-      const redirected = (response.type as string) === "opaqueredirect" || (status >= 300 && status < 400);
+      const redirected =
+        (response.type as string) === "opaqueredirect" || (status >= 300 && status < 400);
       if (redirected) {
         await discard(response);
         return { ok: false, code: "redirect_rejected" };

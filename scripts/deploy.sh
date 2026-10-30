@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 部署某一个产品的 Email Worker。
+# 为一个 Cloudflare 账号部署 Email Worker，对应 Harborly 的一个用户级邮件连接。
 # 本脚本不创建、不接管、不删除 Email Routing 规则。路由请先在 Dashboard 手工切换。
 set -euo pipefail
 
@@ -20,7 +20,7 @@ fi
 command -v pnpm >/dev/null 2>&1 || die "需要已安装的 pnpm。本脚本不会安装全局工具。"
 command -v node >/dev/null 2>&1 || die "需要 Node.js 22 或更新版本。"
 
-for name in INGEST_URL INTEGRATION_ID FORWARD_TO ALLOWED_RECIPIENTS PRODUCT_NAME INTEGRATION_SECRET; do
+for name in INGEST_URL CONNECTION_ID CONNECTION_SECRET FORWARD_TO; do
   if [[ -z "${!name:-}" ]]; then
     die "缺少环境变量 ${name}"
   fi
@@ -34,8 +34,6 @@ const fail = (message) => {
 
 const email =
   /^[a-z0-9._%+\-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const catchAll =
-  /^\*@([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/;
 const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const uuid =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -63,39 +61,19 @@ if (ingestUrl.protocol !== "https:" || ingestUrl.username || ingestUrl.password 
   fail("INGEST_URL 必须是不含账号信息的 HTTPS 地址");
 }
 
-if (!uuid.test((process.env.INTEGRATION_ID ?? "").trim())) fail("INTEGRATION_ID 必须是 GUID");
+if (!uuid.test((process.env.CONNECTION_ID ?? "").trim())) fail("CONNECTION_ID 必须是 GUID");
 
 if (!isExact((process.env.FORWARD_TO ?? "").trim().toLowerCase())) {
   fail("FORWARD_TO 必须是单个邮箱地址，且该地址要先在 Cloudflare 完成 destination 验证");
 }
 
-const product = process.env.PRODUCT_NAME ?? "";
-if (product.trim().length === 0 || product.length > 80 || /[\u0000-\u001F\u007F]/.test(product)) {
-  fail("PRODUCT_NAME 不能为空、不能超过 80 个字符，且不能包含控制字符");
+const label = process.env.CONNECTION_LABEL ?? "";
+if (label.length > 80 || /[\u0000-\u001F\u007F]/.test(label)) {
+  fail("CONNECTION_LABEL 不能超过 80 个字符，且不能包含控制字符");
 }
 
-const secret = process.env.INTEGRATION_SECRET ?? "";
-if (secret.length === 0 || secret.length > 4096 || /[\r\n]/.test(secret)) fail("INTEGRATION_SECRET 无效");
-
-const allow = process.env.ALLOWED_RECIPIENTS ?? "";
-if (allow.trim().length === 0 || /[\u0000-\u001F\u007F]/.test(allow)) fail("ALLOWED_RECIPIENTS 无效");
-const parts = allow.split(",");
-let usable = 0;
-parts.forEach((part, index) => {
-  const entry = part.trim().toLowerCase();
-  const label = `ALLOWED_RECIPIENTS 第 ${index + 1} 项`;
-  if (!entry) fail(`${label}为空`);
-  if (entry.startsWith("*@")) {
-    const match = catchAll.exec(entry);
-    const domain = match?.[1] ?? "";
-    if (!match || domain.length > 253 || ipv4.test(domain)) fail(`${label}不是 apex catch-all`);
-    usable += 1;
-    return;
-  }
-  if (!isExact(entry)) fail(`${label}不是精确地址`);
-  usable += 1;
-});
-if (usable === 0) fail("ALLOWED_RECIPIENTS 没有可用地址");
+const secret = process.env.CONNECTION_SECRET ?? "";
+if (secret.length === 0 || secret.length > 4096 || /[\r\n]/.test(secret)) fail("CONNECTION_SECRET 无效");
 
 const hook = (process.env.FALLBACK_WEBHOOK ?? "").trim();
 const sign = process.env.FALLBACK_SIGN_SECRET ?? "";
@@ -149,11 +127,11 @@ worker_name="$(sed -n 's/^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)"
 
 cat <<EOF
 即将部署 Worker「${worker_name}」，Wrangler ${version}。
-每个产品要使用不同的 Worker 名称，并各自配置 INTEGRATION_ID、FORWARD_TO 和 ALLOWED_RECIPIENTS。
+一个 Cloudflare 账号部署一份，对应 Harborly 的一个邮件连接；该账号下所有产品共用同一个 FORWARD_TO。
+Worker 不持有地址名单。产品归属由 Harborly 按收件地址决定，未登记的地址会被 Harborly 拒收。
 
 本脚本不会声明 addresses，因此不会创建、接管或删除 Email Routing 规则。
-请先在 Dashboard 把本产品的精确地址改成 Send to a Worker，并人工确认目标就是「${worker_name}」。
-精确地址规则优先于 catch-all。apex catch-all 可选，只在整个 apex 都属于这个产品时使用。
+请在 Dashboard 为每个域名把 catch-all（或个别精确地址）改成 Send to a Worker，并人工确认目标就是「${worker_name}」。
 addresses 是顶层字段，所有 Wrangler environment 共享；写在 env 下会被忽略。
 不要把 addresses 设为空数组，那会删除本 Worker 管理的全部路由。
 非交互环境不会自动确认删除或接管；不要在 CI 里跳过确认去改路由。
@@ -168,7 +146,7 @@ secret_put() {
   printf '%s' "$value" | pnpm exec wrangler secret put "$key" --config wrangler.jsonc
 }
 
-secret_put INTEGRATION_SECRET "$INTEGRATION_SECRET"
+secret_put CONNECTION_SECRET "$CONNECTION_SECRET"
 if [[ -n "${FALLBACK_SIGN_SECRET:-}" ]]; then
   secret_put FALLBACK_SIGN_SECRET "$FALLBACK_SIGN_SECRET"
 fi
@@ -180,10 +158,11 @@ deploy_args=(
   deploy
   --config wrangler.jsonc
   --var "INGEST_URL:${INGEST_URL}"
-  --var "INTEGRATION_ID:${INTEGRATION_ID}"
+  --var "CONNECTION_ID:${CONNECTION_ID}"
   --var "FORWARD_TO:${FORWARD_TO}"
-  --var "ALLOWED_RECIPIENTS:${ALLOWED_RECIPIENTS}"
-  --var "PRODUCT_NAME:${PRODUCT_NAME}"
 )
+if [[ -n "${CONNECTION_LABEL:-}" ]]; then
+  deploy_args+=(--var "CONNECTION_LABEL:${CONNECTION_LABEL}")
+fi
 
 pnpm exec wrangler "${deploy_args[@]}"
