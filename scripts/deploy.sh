@@ -20,7 +20,7 @@ fi
 command -v pnpm >/dev/null 2>&1 || die "需要已安装的 pnpm。本脚本不会安装全局工具。"
 command -v node >/dev/null 2>&1 || die "需要 Node.js 22 或更新版本。"
 
-for name in INGEST_URL CONNECTION_ID CONNECTION_SECRET FORWARD_TO; do
+for name in CONNECTION_ID CONNECTION_SECRET FORWARD_TO; do
   if [[ -z "${!name:-}" ]]; then
     die "缺少环境变量 ${name}"
   fi
@@ -47,18 +47,21 @@ function isExact(value) {
   return email.test(value);
 }
 
+// 可选：留空时 Worker 使用 https://harborly.dev/api/workspace/mail-ingest。
 const ingest = process.env.INGEST_URL ?? "";
-if (ingest.length === 0 || ingest.length > 2048 || /[\u0000-\u001F\u007F]/.test(ingest)) {
-  fail("INGEST_URL 必须是 HTTPS 地址");
-}
-let ingestUrl;
-try {
-  ingestUrl = new URL(ingest.trim());
-} catch {
-  fail("INGEST_URL 必须是 HTTPS 地址");
-}
-if (ingestUrl.protocol !== "https:" || ingestUrl.username || ingestUrl.password || ingestUrl.hostname.length === 0) {
-  fail("INGEST_URL 必须是不含账号信息的 HTTPS 地址");
+if (ingest.length > 0) {
+  if (ingest.length > 2048 || /[\u0000-\u001F\u007F]/.test(ingest)) {
+    fail("INGEST_URL 必须是 HTTPS 地址");
+  }
+  let ingestUrl;
+  try {
+    ingestUrl = new URL(ingest.trim());
+  } catch {
+    fail("INGEST_URL 必须是 HTTPS 地址");
+  }
+  if (ingestUrl.protocol !== "https:" || ingestUrl.username || ingestUrl.password || ingestUrl.hostname.length === 0) {
+    fail("INGEST_URL 必须是不含账号信息的 HTTPS 地址");
+  }
 }
 
 if (!uuid.test((process.env.CONNECTION_ID ?? "").trim())) fail("CONNECTION_ID 必须是 GUID");
@@ -67,41 +70,9 @@ if (!isExact((process.env.FORWARD_TO ?? "").trim().toLowerCase())) {
   fail("FORWARD_TO 必须是单个邮箱地址，且该地址要先在 Cloudflare 完成 destination 验证");
 }
 
-const label = process.env.CONNECTION_LABEL ?? "";
-if (label.length > 80 || /[\u0000-\u001F\u007F]/.test(label)) {
-  fail("CONNECTION_LABEL 不能超过 80 个字符，且不能包含控制字符");
-}
-
 const secret = process.env.CONNECTION_SECRET ?? "";
 if (secret.length === 0 || secret.length > 4096 || /[\r\n]/.test(secret)) fail("CONNECTION_SECRET 无效");
 
-const hook = (process.env.FALLBACK_WEBHOOK ?? "").trim();
-const sign = process.env.FALLBACK_SIGN_SECRET ?? "";
-if (/[\r\n]/.test(sign) || sign.length > 4096) fail("FALLBACK_SIGN_SECRET 无效");
-if (sign.length > 0 && hook.length === 0) fail("设置了 FALLBACK_SIGN_SECRET 时必须同时设置 FALLBACK_WEBHOOK");
-if (hook.length > 0) {
-  let hookUrl;
-  try {
-    hookUrl = new URL(hook);
-  } catch {
-    fail("FALLBACK_WEBHOOK 必须是飞书官方 HTTPS 地址");
-  }
-  const matched = hookUrl.pathname.match(/^\/open-apis\/bot\/v2\/hook\/([0-9a-fA-F-]{36})$/);
-  const id = matched?.[1] ?? "";
-  const canonical = uuid.test(id) ? `https://open.feishu.cn/open-apis/bot/v2/hook/${id.toLowerCase()}` : "";
-  if (
-    hookUrl.protocol !== "https:" ||
-    hookUrl.hostname !== "open.feishu.cn" ||
-    hookUrl.port !== "" ||
-    hookUrl.username ||
-    hookUrl.password ||
-    hookUrl.search !== "" ||
-    hookUrl.hash !== "" ||
-    hookUrl.href !== canonical
-  ) {
-    fail("FALLBACK_WEBHOOK 只允许 https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>");
-  }
-}
 NODE
 
 raw_version="$(pnpm exec wrangler --version 2>/dev/null || true)"
@@ -147,22 +118,15 @@ secret_put() {
 }
 
 secret_put CONNECTION_SECRET "$CONNECTION_SECRET"
-if [[ -n "${FALLBACK_SIGN_SECRET:-}" ]]; then
-  secret_put FALLBACK_SIGN_SECRET "$FALLBACK_SIGN_SECRET"
-fi
-if [[ -n "${FALLBACK_WEBHOOK:-}" ]]; then
-  secret_put FALLBACK_WEBHOOK "$FALLBACK_WEBHOOK"
-fi
 
 deploy_args=(
   deploy
   --config wrangler.jsonc
-  --var "INGEST_URL:${INGEST_URL}"
   --var "CONNECTION_ID:${CONNECTION_ID}"
   --var "FORWARD_TO:${FORWARD_TO}"
 )
-if [[ -n "${CONNECTION_LABEL:-}" ]]; then
-  deploy_args+=(--var "CONNECTION_LABEL:${CONNECTION_LABEL}")
+if [[ -n "${INGEST_URL:-}" ]]; then
+  deploy_args+=(--var "INGEST_URL:${INGEST_URL}")
 fi
 
 pnpm exec wrangler "${deploy_args[@]}"

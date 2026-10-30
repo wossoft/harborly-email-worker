@@ -1,12 +1,9 @@
 import type { Env, MailIngestPayload, ParseStatus } from "./types.ts";
-import { MAX_API_BYTES, MAX_RAW_PARSE_BYTES } from "./types.ts";
+import { DEFAULT_INGEST_URL, MAX_API_BYTES, MAX_RAW_PARSE_BYTES } from "./types.ts";
 
 const MAX_ATTEMPTS = 4;
 const TOTAL_BUDGET_MS = 12_000;
 const ATTEMPT_TIMEOUT_MS = 4_000;
-const FALLBACK_ATTEMPTS = 2;
-const FALLBACK_BUDGET_MS = 5_000;
-const FALLBACK_TIMEOUT_MS = 3_000;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const SAFE_CODE = /^[a-z0-9_]{1,40}$/;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -27,12 +24,6 @@ function toHex(bytes: Uint8Array): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return hex;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -90,27 +81,6 @@ function ingestUrlError(raw: string): string | null {
   if (url.protocol !== "https:" || url.username || url.password || url.hostname.length === 0)
     return "invalid_ingest_url";
   return null;
-}
-
-/** 只接受飞书官方自定义机器人 HTTPS 地址，拒绝其他主机、端口、路径和查询串。 */
-export function canonicalFeishuWebhook(raw: string): string | null {
-  const value = raw.trim();
-  if (value.length === 0 || /[\u0000-\u001F\u007F]/.test(value)) return null;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.hostname !== "open.feishu.cn" || url.port !== "")
-    return null;
-  if (url.username || url.password || url.search !== "" || url.hash !== "") return null;
-  const match = url.pathname.match(/^\/open-apis\/bot\/v2\/hook\/([0-9a-fA-F-]{36})$/);
-  const id = match?.[1];
-  if (!id || !UUID_RE.test(id)) return null;
-  const canonical = `https://open.feishu.cn/open-apis/bot/v2/hook/${id.toLowerCase()}`;
-  if (url.href !== canonical) return null;
-  return canonical;
 }
 
 function encodedSize(payload: MailIngestPayload): number {
@@ -220,7 +190,7 @@ async function signedHeaders(
 }
 
 export async function postIngest(env: Env, body: Uint8Array): Promise<AttemptResult> {
-  const ingestUrl = binding(env.INGEST_URL).trim();
+  const ingestUrl = binding(env.INGEST_URL).trim() || DEFAULT_INGEST_URL;
   const connectionId = binding(env.CONNECTION_ID).trim();
   const secret = binding(env.CONNECTION_SECRET);
   const urlError = ingestUrlError(ingestUrl);
@@ -273,160 +243,6 @@ export async function postIngest(env: Env, body: Uint8Array): Promise<AttemptRes
       lastCode = isTimeout(error) ? "timeout" : "network";
     }
     if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt, deadline));
-  }
-  return { ok: false, code: safeCode(lastCode) };
-}
-
-async function feishuSign(secret: string, timestamp: string): Promise<string> {
-  const key = await importHmacKey(`${timestamp}\n${secret}`);
-  const signature = await crypto.subtle.sign("HMAC", key, new Uint8Array(0));
-  return bytesToBase64(new Uint8Array(signature));
-}
-
-/** 只含连接标签、接收时间和失败码；不含主题、正文、发件人或收件地址。 */
-function fallbackText(connectionLabel: string, receivedAt: string, code: string): string {
-  const label =
-    connectionLabel.trim().length > 0 ? connectionLabel.trim().slice(0, 80) : "未命名连接";
-  const when = ISO_TIME.test(receivedAt) ? receivedAt : new Date().toISOString();
-  return `Harborly 邮件上报失败\n连接: ${label}\n接收时间: ${when}\n失败码: ${safeCode(code)}`;
-}
-
-async function readLimited(response: Response, maxBytes: number): Promise<string | null> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return null;
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(merged);
-}
-
-function feishuAccepted(body: string): { ok: boolean; code: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return { ok: false, code: "feishu_rejected" };
-  }
-  if (typeof parsed !== "object" || parsed === null) return { ok: false, code: "feishu_rejected" };
-  const record = parsed as Record<string, unknown>;
-  const hasCode = "code" in record;
-  const statusValue =
-    "StatusCode" in record
-      ? record.StatusCode
-      : "status_code" in record
-        ? record.status_code
-        : undefined;
-  const hasStatus = statusValue !== undefined;
-  if (!hasCode && !hasStatus) return { ok: false, code: "feishu_rejected" };
-  if (hasCode && record.code !== 0) {
-    const numeric =
-      typeof record.code === "number" && Number.isSafeInteger(record.code) ? record.code : null;
-    return {
-      ok: false,
-      code:
-        numeric !== null && numeric >= 0 && numeric <= 999999
-          ? `feishu_${numeric}`
-          : "feishu_rejected",
-    };
-  }
-  if (hasStatus && statusValue !== 0) return { ok: false, code: "feishu_rejected" };
-  return { ok: true, code: "accepted" };
-}
-
-export async function postFallback(
-  env: Env,
-  receivedAt: string,
-  failureCode: string,
-): Promise<AttemptResult> {
-  const rawWebhook = binding(env.FALLBACK_WEBHOOK).trim();
-  if (rawWebhook.length === 0) return { ok: true, code: "not_configured" };
-  const webhook = canonicalFeishuWebhook(rawWebhook);
-  if (!webhook) return { ok: false, code: "invalid_webhook" };
-
-  const secret = binding(env.FALLBACK_SIGN_SECRET);
-  const connectionLabel = binding(env.CONNECTION_LABEL)
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
-    .trim()
-    .slice(0, 80);
-  const text = fallbackText(connectionLabel, receivedAt, failureCode);
-  const deadline = Date.now() + FALLBACK_BUDGET_MS;
-  let lastCode = "fallback_failed";
-
-  for (let attempt = 0; attempt < FALLBACK_ATTEMPTS; attempt++) {
-    const remaining = deadline - Date.now();
-    if (remaining < 250)
-      return {
-        ok: false,
-        code: lastCode === "fallback_failed" ? "budget_exceeded" : lastCode,
-      };
-    const payload: Record<string, unknown> = {
-      msg_type: "text",
-      content: { text },
-    };
-    if (secret.length > 0) {
-      if (secret.length > 4096) return { ok: false, code: "invalid_sign_secret" };
-      try {
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        payload.timestamp = timestamp;
-        payload.sign = await feishuSign(secret, timestamp);
-      } catch {
-        return { ok: false, code: "sign_failed" };
-      }
-    }
-    try {
-      const response = await fetch(webhook, {
-        method: "POST",
-        redirect: "manual",
-        cache: "no-store",
-        headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(Math.min(FALLBACK_TIMEOUT_MS, remaining)),
-      });
-      const status = response.status;
-      const redirected =
-        (response.type as string) === "opaqueredirect" || (status >= 300 && status < 400);
-      if (redirected) {
-        await discard(response);
-        return { ok: false, code: "redirect_rejected" };
-      }
-      if (status === 0) {
-        await discard(response);
-        lastCode = "network";
-      } else if (status < 200 || status >= 300) {
-        await discard(response);
-        if (!retryableStatus(status)) return { ok: false, code: `http_${status}` };
-        lastCode = status === 429 ? "http_429" : `http_${status}`;
-      } else {
-        const raw = await readLimited(response, 4096);
-        if (raw === null) return { ok: false, code: "feishu_rejected" };
-        const accepted = feishuAccepted(raw);
-        if (!accepted.ok) return accepted;
-        return { ok: true, code: "accepted" };
-      }
-    } catch (error) {
-      lastCode = isTimeout(error) ? "timeout" : "network";
-    }
-    if (attempt < FALLBACK_ATTEMPTS - 1) await sleep(backoffMs(attempt, deadline));
   }
   return { ok: false, code: safeCode(lastCode) };
 }

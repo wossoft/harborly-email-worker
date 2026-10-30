@@ -1,4 +1,4 @@
-import { postFallback, postIngest, serializeIngest } from "./client.ts";
+import { postIngest, serializeIngest } from "./client.ts";
 import { isExactAddress, parseInbound } from "./parser.ts";
 import type { Env, ForwardStatus, InboundEmail } from "./types.ts";
 
@@ -46,7 +46,6 @@ async function deliverReport(
   forwardStatus: ForwardStatus,
 ): Promise<void> {
   const started = Date.now();
-  let failureCode = "internal";
   try {
     const parsed = await parseInbound(message);
     const bytes = serializeIngest({
@@ -71,8 +70,6 @@ async function deliverReport(
       durationMs: Date.now() - started,
       forwardStatus,
     });
-    if (result.ok) return;
-    failureCode = result.code;
   } catch {
     safeLog({
       event: "ingest_failed",
@@ -81,19 +78,6 @@ async function deliverReport(
       durationMs: Date.now() - started,
       forwardStatus,
     });
-  }
-
-  try {
-    const fallback = await postFallback(env, receivedAt, failureCode);
-    if (fallback.code === "not_configured") return;
-    safeLog({
-      event: fallback.ok ? "fallback_ok" : "fallback_failed",
-      code: fallback.code,
-      rawSize,
-      durationMs: Date.now() - started,
-    });
-  } catch {
-    safeLog({ event: "fallback_failed", code: "internal", rawSize });
   }
 }
 

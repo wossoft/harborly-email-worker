@@ -1,10 +1,8 @@
 # 本地 wrangler dev 用的占位值。复制为 .dev.vars 后再改。不要提交 .dev.vars，也不要写入真实密钥。
 # 生产密钥用 `pnpm exec wrangler secret put`，不要写进 wrangler.jsonc。
 
+# 可选，默认 https://harborly.dev/api/workspace/mail-ingest
 INGEST_URL=https://example.invalid/api/workspace/mail-ingest
 CONNECTION_ID=00000000-0000-0000-0000-000000000000
 CONNECTION_SECRET=replace-me
 FORWARD_TO=verified-destination@example.invalid
-CONNECTION_LABEL=example-connection
-FALLBACK_WEBHOOK=
-FALLBACK_SIGN_SECRET=

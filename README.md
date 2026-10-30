@@ -11,29 +11,27 @@ Worker 只导出 `email` 处理函数，没有公网 `fetch` 调试入口。
 1. 转发到 `FORWARD_TO`。这个地址必须是 Cloudflare 里已经验证的 destination。转发失败会记 `forwardStatus: "failed"`，然后继续上报。
 2. `ctx.waitUntil` 异步上报。转发抛错时仍然上报。
 3. 产品归属由 Harborly 按信封收件地址决定。未在任何产品登记的地址，Harborly 返回 4xx 拒收，Worker 不重试，原因显示在 Harborly 的连接页。
-4. 上报最终失败后，如果配置了飞书兜底，再发一条只含连接标签、接收时间和失败码的告警。
+
+Worker 不直接发任何通知。上报失败只记日志，原件已在个人邮箱；飞书推送统一由 Harborly 负责。
 
 网络目标只来自 Worker 配置。邮件正文、主题和头里的链接不会成为请求地址。
 
 ## 在 Harborly 建连接
 
-1. 在 Harborly「账户 → 邮件连接」新建一个连接，取得 connectionId、连接密钥和 Ingest URL。密钥只显示一次，直接放进部署环境变量，不要贴到别处。
+1. 在 Harborly「账户 → 邮件连接」新建一个连接，取得 connectionId 和连接密钥。密钥只显示一次，直接放进部署环境变量，不要贴到别处。
 2. 在每个产品的邮件设置里登记该产品使用的收件地址。地址只在 Harborly 登记，不写进 Worker。
 
 一个 Cloudflare 账号对应一个连接、一份部署。同一账号下新增产品时，只需在 Harborly 登记地址，不用重新部署 Worker。
 
 ## 配置
 
-| 名称                   | 来源             | 作用                                                           |
-| ---------------------- | ---------------- | -------------------------------------------------------------- |
-| `name`                 | `wrangler.jsonc` | Worker 名称。同一账号内唯一即可。                              |
-| `INGEST_URL`           | 明文变量         | 连接页给出的 Ingest URL，只允许 HTTPS。                        |
-| `CONNECTION_ID`        | 明文变量         | 连接 GUID。                                                    |
-| `CONNECTION_SECRET`    | secret           | HMAC 密钥，原始 UTF-8，不做 base64 解码。                      |
-| `FORWARD_TO`           | 明文变量         | 已验证的个人邮箱，所有产品共用。                               |
-| `CONNECTION_LABEL`     | 可选明文变量     | 飞书兜底里显示的连接标签，最长 80 字符。                       |
-| `FALLBACK_WEBHOOK`     | 可选 secret      | 只允许 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`。 |
-| `FALLBACK_SIGN_SECRET` | 可选 secret      | 飞书机器人签名密钥。                                           |
+| 名称                | 来源             | 作用                                                                                |
+| ------------------- | ---------------- | ----------------------------------------------------------------------------------- |
+| `name`              | `wrangler.jsonc` | Worker 名称。同一账号内唯一即可。                                                   |
+| `INGEST_URL`        | 可选明文变量     | 默认 `https://harborly.dev/api/workspace/mail-ingest`；自托管时覆盖，只允许 HTTPS。 |
+| `CONNECTION_ID`     | 明文变量         | 连接 GUID。                                                                         |
+| `CONNECTION_SECRET` | secret           | HMAC 密钥，原始 UTF-8，不做 base64 解码。                                           |
+| `FORWARD_TO`        | 明文变量         | 已验证的个人邮箱，所有产品共用。                                                    |
 
 默认 `wrangler.jsonc` 不写真实域名、真实收件地址，也不声明入站路由。明文变量由部署脚本在运行时传入。
 
@@ -73,18 +71,15 @@ Wrangler 4.113.0 起可以用顶层 `addresses` 把入站地址交给当前 Work
 
 ```bash
 pnpm install
-export INGEST_URL="https://example.invalid/api/workspace/mail-ingest"
 export CONNECTION_ID="00000000-0000-0000-0000-000000000000"
 export CONNECTION_SECRET="replace-me"
 export FORWARD_TO="verified-destination@example.invalid"
-# 可选
-# export CONNECTION_LABEL="example-connection"
-# export FALLBACK_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/00000000-0000-0000-0000-000000000000"
-# export FALLBACK_SIGN_SECRET="replace-me"
+# 可选：自托管 Harborly 时覆盖，默认 https://harborly.dev/api/workspace/mail-ingest
+# export INGEST_URL="https://example.invalid/api/workspace/mail-ingest"
 bash scripts/deploy.sh
 ```
 
-脚本使用 `set -euo pipefail`。它会检查必填变量、地址格式、HTTPS、飞书官方地址和 Wrangler 版本；发现 `addresses`、`wrangler.toml` 或 `wrangler.json` 时直接退出。密钥通过 `wrangler secret put` 从 stdin 写入。脚本只写入不删除：之后取消飞书兜底时，需要手动执行 `pnpm exec wrangler secret delete FALLBACK_WEBHOOK`（以及 `FALLBACK_SIGN_SECRET`）。脚本不打印变量值，也不把密钥写进仓库。Wrangler 自己的输出仍可能回显明文变量，不要外传部署日志。
+脚本使用 `set -euo pipefail`。它会检查必填变量、地址格式、HTTPS 和 Wrangler 版本；发现 `addresses`、`wrangler.toml` 或 `wrangler.json` 时直接退出。密钥通过 `wrangler secret put` 从 stdin 写入。脚本只写入不删除；早期部署留下的 `FALLBACK_WEBHOOK`、`FALLBACK_SIGN_SECRET` 已不再使用，可用 `pnpm exec wrangler secret delete` 手动删除。脚本不打印变量值，也不把密钥写进仓库。Wrangler 自己的输出仍可能回显明文变量，不要外传部署日志。
 
 本地开发可以把 `.dev.vars.example` 复制为 `.dev.vars`。`.dev.vars` 已被忽略。示例里只有占位值。
 
@@ -115,15 +110,9 @@ JSON 字段：`envelopeFrom`、`envelopeTo`、`messageId`、`subject`、`textBod
 
 `parseStatus` 为 `parsed`、`headers_only` 或 `failed`。`forwardStatus` 为 `succeeded` 或 `failed`。
 
-## 飞书兜底
-
-只在 Harborly 上报最终失败时发送。消息只有连接标签、接收时间和失败码，没有发件人、收件地址、主题或正文。
-
-Webhook 必须是 `https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>`，不能带端口、查询串或其他路径。请求同样禁止跟随重定向。配置了签名密钥时，按飞书自定义机器人的算法签名：密钥材料是 `timestamp\nsecret`，对空字节做 HMAC-SHA256，再做 Base64，放进 JSON 的 `timestamp` 和 `sign`。HTTP 状态和飞书返回的 `code` / `StatusCode` 都必须表示成功。
-
 ## 日志
 
-日志只有事件名、失败码、原始大小、上报字节数、耗时和 `forwardStatus`。不记录主题、邮箱、正文、密钥、上报 URL、Webhook token，也不记录异常的原始 message。
+日志只有事件名、失败码、原始大小、上报字节数、耗时和 `forwardStatus`。不记录主题、邮箱、正文、密钥、上报 URL，也不记录异常的原始 message。
 
 `wrangler.jsonc` 关闭了 Workers Logs 的调用日志（`invocation_logs: false`），因为 email 事件的调用元数据自带发件人和收件人地址。
 
@@ -138,4 +127,4 @@ pnpm exec tsc --noEmit
 
 提交前对改动过的文件跑 `pnpm exec prettier --write <文件>`（或全仓 `pnpm format`），保持格式一致。`pnpm install` 后会自动启用 pre-commit hook，commit 时对暂存文件做同样的事。
 
-不要从这个包启动 Worker、执行 `wrangler deploy`，或向真实的 Harborly / 飞书地址发请求，除非你正在按上面的步骤部署自己的连接。
+不要从这个包启动 Worker、执行 `wrangler deploy`，或向真实的 Harborly 地址发请求，除非你正在按上面的步骤部署自己的连接。

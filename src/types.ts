@@ -1,3 +1,5 @@
+export const DEFAULT_INGEST_URL = "https://harborly.dev/api/workspace/mail-ingest";
+
 /** 原始 MIME 超过该大小时不读取 raw，只上报头部。 */
 export const MAX_RAW_PARSE_BYTES = 2 * 1024 * 1024;
 
@@ -38,13 +40,11 @@ export interface MailIngestPayload {
 
 /** 每个 Cloudflare 账号一份部署，对应 Harborly 的一个用户级邮件连接。 */
 export interface Env {
-  INGEST_URL: string;
+  /** 留空时使用 DEFAULT_INGEST_URL；自托管 Harborly 时再覆盖。 */
+  INGEST_URL?: string;
   CONNECTION_ID: string;
   CONNECTION_SECRET: string;
   FORWARD_TO: string;
-  CONNECTION_LABEL?: string;
-  FALLBACK_WEBHOOK?: string;
-  FALLBACK_SIGN_SECRET?: string;
 }
 
 /** 只依赖 Email Routing 实际用到的字段，避免把邮件正文当成请求目标。 */
