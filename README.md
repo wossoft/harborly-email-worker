@@ -81,7 +81,7 @@ bash scripts/deploy.sh
 
 脚本使用 `set -euo pipefail`。它会检查必填变量、地址格式、HTTPS 和 Wrangler 版本；发现 `addresses`、`wrangler.toml` 或 `wrangler.json` 时直接退出。密钥通过 `wrangler secret put` 从 stdin 写入。脚本只写入不删除；早期部署留下的 `FALLBACK_WEBHOOK`、`FALLBACK_SIGN_SECRET` 已不再使用，可用 `pnpm exec wrangler secret delete` 手动删除。脚本不打印变量值，也不把密钥写进仓库。Wrangler 自己的输出仍可能回显明文变量，不要外传部署日志。
 
-本地开发可以把 `.dev.vars.example` 复制为 `.dev.vars`。`.dev.vars` 已被忽略。示例里只有占位值。
+也可以把变量写进 `.dev.vars`（从 `.dev.vars.example` 复制），脚本会用它补齐未 export 的变量；已 export 的值优先。脚本按文本解析该文件，只读取上面四个变量，不当作 shell 执行。`.dev.vars` 同时用于本地 `wrangler dev`，已被忽略。示例里只有占位值。注意它里面的值会被直接部署到线上。
 
 ## 上报协议
 

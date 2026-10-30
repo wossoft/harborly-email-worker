@@ -17,12 +17,31 @@ if grep -Eq '"addresses"[[:space:]]*:' wrangler.jsonc; then
   die "拒绝部署：wrangler.jsonc 含有 addresses。本脚本不会创建、接管或删除 Email Routing 规则。请删除该字段，并先在 Dashboard 手工切换路由。"
 fi
 
+# 从 .dev.vars 补齐未设置的变量；已 export 的环境变量优先。按文本解析，不当作 shell 执行。
+if [[ -f .dev.vars ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?(INGEST_URL|CONNECTION_ID|CONNECTION_SECRET|FORWARD_TO)[[:space:]]*=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    if [[ -z "${!key:-}" ]]; then
+      export "$key=$value"
+    fi
+  done < .dev.vars
+  printf '已从 .dev.vars 补齐未设置的变量。\n'
+fi
+
 command -v pnpm >/dev/null 2>&1 || die "需要已安装的 pnpm。本脚本不会安装全局工具。"
 command -v node >/dev/null 2>&1 || die "需要 Node.js 22 或更新版本。"
 
 for name in CONNECTION_ID CONNECTION_SECRET FORWARD_TO; do
   if [[ -z "${!name:-}" ]]; then
-    die "缺少环境变量 ${name}"
+    die "缺少变量 ${name}：请 export 或写入 .dev.vars"
   fi
 done
 
