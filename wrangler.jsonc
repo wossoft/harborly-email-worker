@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "harborly-email-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-30",
+  "workers_dev": false,
+  // 关闭调用日志：email 事件元数据含发件人与收件人地址。
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
+  // 每个产品复制本模板后单独部署，并把 name 改成该产品专用的 Worker 名称。
+  // 明文变量由 scripts/deploy.sh 在部署时传入。这里不写真实域名、收件地址或密钥。
+  // 故意不声明入站路由字段：省略表示部署时不改 Email Routing。
+  // 不要把该字段设为空数组，否则会删除本 Worker 已管理的路由。
+  // 该字段是顶层配置，所有 environment 共享；写在 env 下会被 Wrangler 忽略。
+  "secrets": {
+    "required": ["INTEGRATION_SECRET"]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "harborly-email-worker",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Per-product Cloudflare Email Worker that forwards inbound mail and reports metadata to Harborly.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wossoft/harborly-email-worker.git"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "dependencies": {
+    "postal-mime": "4.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261030.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.156.0"
+  }
+}
